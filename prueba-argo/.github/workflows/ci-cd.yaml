@@ -1,0 +1,76 @@
+name: 🚀 CI/CD Pipeline con Argo Workflows
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: docker.io
+  REGISTRY_USER: americo7
+  PROJECT_NAME: prueba-argo
+
+jobs:
+  trigger-argo-workflow:
+    name: 🎯 Disparar Argo Workflow
+    runs-on: ubuntu-latest
+    steps:
+    - name: 📥 Checkout código
+      uses: actions/checkout@v4
+
+    - name: 🏷️ Configurar variables
+      id: vars
+      run: |
+        echo "SHORT_SHA=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+        echo "BRANCH_NAME=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+        echo "IMAGE_TAG=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+        echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+
+    - name: 📋 Mostrar información
+      run: |
+        echo "🎯 Proyecto: $PROJECT_NAME"
+        echo "👤 Usuario: Americo7"
+        echo "🐳 Registry: $REGISTRY/$REGISTRY_USER"
+        echo "🌿 Branch: ${{ steps.vars.outputs.BRANCH_NAME }}"
+        echo "🏷️ Tag: ${{ steps.vars.outputs.IMAGE_TAG }}"
+
+    - name: 🛠️ Instalar Argo CLI
+      run: |
+        echo "📦 Descargando Argo CLI..."
+        curl -sLO https://github.com/argoproj/argo-workflows/releases/latest/download/argo-linux-amd64.gz
+        gunzip argo-linux-amd64.gz
+        chmod +x argo-linux-amd64
+        sudo mv argo-linux-amd64 /usr/local/bin/argo
+        echo "✅ Argo CLI instalado:"
+        argo version
+
+    - name: 🚀 Ejecutar Argo Workflow
+      run: |
+        echo "🎯 Enviando workflow a Argo..."
+        argo submit workflows/ci-cd-workflow.yaml \
+          --parameter repo-url=${{ github.event.repository.clone_url }} \
+          --parameter branch=${{ steps.vars.outputs.BRANCH_NAME }} \
+          --parameter image-tag=${{ steps.vars.outputs.IMAGE_TAG }} \
+          --parameter registry-url=$REGISTRY/$REGISTRY_USER \
+          --server ${{ secrets.ARGO_SERVER }} \
+          --token ${{ secrets.ARGO_TOKEN }} \
+          --name prueba-argo-${{ steps.vars.outputs.TIMESTAMP }}-${{ steps.vars.outputs.SHORT_SHA }} \
+          --wait \
+          --log
+      env:
+        ARGO_SERVER: ${{ secrets.ARGO_SERVER }}
+        ARGO_TOKEN: ${{ secrets.ARGO_TOKEN }}
+
+    - name: 📊 Estado del workflow
+      if: always()
+      run: |
+        echo "📋 Resumen del despliegue:"
+        echo "  ✅ Proyecto: prueba-argo"
+        echo "  ✅ Usuario: Americo7"  
+        echo "  ✅ Imagen: $REGISTRY/$REGISTRY_USER/prueba-argo:${{ steps.vars.outputs.IMAGE_TAG }}"
+        echo "  ✅ Branch: ${{ steps.vars.outputs.BRANCH_NAME }}"
+        echo ""
+        echo "🔗 Para probar la aplicación:"
+        echo "kubectl port-forward service/nestjs-service 8080:80 -n prueba-argo"
+        echo "curl http://localhost:8080"

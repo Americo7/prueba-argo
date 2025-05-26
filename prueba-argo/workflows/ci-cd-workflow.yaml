@@ -1,0 +1,142 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: prueba-argo-ci-cd-
+  namespace: argo
+  labels:
+    app: prueba-argo-ci-cd
+    owner: americo7
+spec:
+  entrypoint: ci-cd-pipeline
+  arguments:
+    parameters:
+    - name: repo-url
+      value: "https://github.com/Americo7/prueba-argo.git"
+    - name: branch
+      value: "main"
+    - name: image-tag
+      value: "latest"
+    - name: registry-url
+      value: "docker.io/americo7"
+
+  volumeClaimTemplates:
+  - metadata:
+      name: workspace
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 2Gi
+
+  templates:
+  - name: ci-cd-pipeline
+    dag:
+      tasks:
+      - name: clone-repo
+        template: git-clone
+      - name: run-tests
+        template: run-tests
+        dependencies: [clone-repo]
+      - name: build-image
+        template: docker-build
+        dependencies: [run-tests]
+      - name: deploy-to-k8s
+        template: k8s-deploy
+        dependencies: [build-image]
+
+  - name: git-clone
+    container:
+      image: alpine/git:latest
+      command: [sh, -c]
+      args:
+        - |
+          echo "🔄 Clonando repositorio de Americo7..."
+          git clone {{workflow.parameters.repo-url}} /workspace
+          cd /workspace
+          git checkout {{workflow.parameters.branch}}
+          echo "✅ Repositorio clonado exitosamente"
+          echo "📁 Contenido del workspace:"
+          ls -la
+      volumeMounts:
+      - name: workspace
+        mountPath: /workspace
+
+  - name: run-tests
+    container:
+      image: node:18-alpine
+      command: [sh, -c]
+      args:
+        - |
+          echo "🧪 Ejecutando tests para prueba-argo..."
+          cd /workspace
+          npm ci
+          npm run test
+          echo "✅ Tests completados exitosamente"
+      volumeMounts:
+      - name: workspace
+        mountPath: /workspace
+
+  - name: docker-build
+    container:
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - "--context=/workspace"
+        - "--dockerfile=/workspace/Dockerfile"
+        - "--destination={{workflow.parameters.registry-url}}/prueba-argo:{{workflow.parameters.image-tag}}"
+        - "--destination={{workflow.parameters.registry-url}}/prueba-argo:latest"
+        - "--cache=true"
+        - "--cache-ttl=24h"
+        - "--skip-tls-verify"
+      volumeMounts:
+      - name: workspace
+        mountPath: /workspace
+      - name: docker-config
+        mountPath: /kaniko/.docker
+
+  - name: k8s-deploy
+    container:
+      image: bitnami/kubectl:latest
+      command: [sh, -c]
+      args:
+        - |
+          echo "🚀 Desplegando prueba-argo en Kubernetes..."
+          
+          # Aplicar namespace
+          echo "📦 Creando namespace..."
+          kubectl apply -f /workspace/k8s/namespace.yaml
+          
+          # Aplicar ConfigMap
+          echo "⚙️  Aplicando configuración..."
+          kubectl apply -f /workspace/k8s/configmap.yaml
+          
+          # Reemplazar imagen en deployment
+          echo "🔄 Configurando imagen: {{workflow.parameters.registry-url}}/prueba-argo:{{workflow.parameters.image-tag}}"
+          sed -i 's|__IMAGE_TAG__|{{workflow.parameters.registry-url}}/prueba-argo:{{workflow.parameters.image-tag}}|g' /workspace/k8s/deployment.yaml
+          
+          # Aplicar manifiestos
+          echo "📋 Aplicando deployment y service..."
+          kubectl apply -f /workspace/k8s/deployment.yaml
+          kubectl apply -f /workspace/k8s/service.yaml
+          
+          # Esperar deployment
+          echo "⏳ Esperando que el deployment esté listo (máximo 5 minutos)..."
+          kubectl rollout status deployment/nestjs-app -n prueba-argo --timeout=300s
+          
+          # Verificar estado
+          echo "📊 Estado final:"
+          kubectl get pods,svc -n prueba-argo
+          
+          # Mostrar logs de los pods
+          echo "📝 Logs de la aplicación:"
+          kubectl logs -l app=nestjs-app -n prueba-argo --tail=10
+          
+          echo "✅ ¡Despliegue de prueba-argo completado exitosamente!"
+          echo "🔗 Para acceder: kubectl port-forward service/nestjs-service 8080:80 -n prueba-argo"
+      volumeMounts:
+      - name: workspace
+        mountPath: /workspace
+
+  volumes:
+  - name: docker-config
+    secret:
+      secretName: docker-config

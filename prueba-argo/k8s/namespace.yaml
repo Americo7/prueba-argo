@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prueba-argo
+  labels:
+    name: prueba-argo
+    managed-by: argo-workflows
+    app: nestjs-app
